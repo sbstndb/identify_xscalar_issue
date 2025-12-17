@@ -20,12 +20,18 @@ xt::noalias(result) = vec1 + static_cast<T>(1.0);
 
 ## Key Findings
 
-| Size | Best Choice | Performance |
-|------|-------------|-------------|
-| 1-2 | `xtensor_fixed` + no XSIMD | **0.2ns** (15-20x faster) |
-| 3-16 | `xtensor_fixed` + no XSIMD | 2-4x faster |
-| 32-64 | `xtensor` + XSIMD | XSIMD overhead amortized |
-| 256+ | `xtensor_fixed` + XSIMD + Clang | 1.5-2x faster |
+| Size | Best Choice | Best Time | Worst Choice | Worst Time |
+|------|-------------|-----------|--------------|------------|
+| 1-2 | `xtensor_fixed` + no XSIMD + GCC | **0.2ns** | `xtensor_fixed` + XSIMD + GCC | ~10ns (50x slower) |
+| 3-16 | `xtensor_fixed` + no XSIMD | ~2ns | `xtensor_fixed` + XSIMD + GCC | ~10ns (5x slower) |
+| 32-64 | `xtensor` + no XSIMD + Clang | ~7-9ns | `xtensor_fixed` + no XSIMD + GCC | ~30-40ns (4x slower) |
+| 256+ | `xtensor_fixed` + XSIMD + Clang | ~24-80ns | `xtensor_fixed` + no XSIMD + GCC | ~100-400ns (4-5x slower) |
+
+### Key Observations
+
+- **XSIMD hurts `xtensor_fixed` on GCC for small sizes**: 10ns overhead dominates computation
+- **`gcc13_noxsimd_fixed` is catastrophic for large sizes**: Up to 400ns at size=1024
+- **Clang without XSIMD has anomalies at sizes 8-9**: `xtensor_fixed` regresses to ~10-12ns
 
 ### Why?
 
