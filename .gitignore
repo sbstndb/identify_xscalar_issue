@@ -1,0 +1,18 @@
+# Build directories
+build_*/
+install/
+deps/
+
+# Benchmark results
+*.txt
+*.json
+*.csv
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Editor
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,61 @@
+# xtensor Scalar Addition Benchmark
+
+Benchmarking `xt::xtensor` vs `xt::xtensor_fixed` for scalar addition across 18 compiler configurations.
+
+## Quick Start
+
+```bash
+./build.sh --compiler=gcc-14 --xsimd=ON --jobs=8
+./build_gcc14_xsimd/bench_xscalar
+```
+
+## Benchmark Kernel
+
+```cpp
+xt::noalias(result) = vec1 + static_cast<T>(1.0);
+```
+
+## Key Findings
+
+| Size | Best Choice | Performance |
+|------|-------------|-------------|
+| 1-2 | `xtensor_fixed` + no XSIMD | **0.2ns** (15-20x faster) |
+| 3-16 | `xtensor_fixed` + no XSIMD | 2-4x faster |
+| 32-64 | `xtensor` + XSIMD | XSIMD overhead amortized |
+| 256+ | `xtensor_fixed` + XSIMD + Clang | 1.5-2x faster |
+
+### Why?
+
+- **Size 1-2**: Compiler optimizes `xtensor_fixed` to a single instruction
+- **Small sizes + XSIMD**: Vectorization overhead exceeds computation time
+- **Large sizes**: SIMD benefits outweigh fixed-size advantages
+
+### Decision Guide
+
+```
+Size known at compile time?
+├── YES, size ≤ 16   → xtensor_fixed, no XSIMD
+├── YES, size > 256  → xtensor_fixed, XSIMD, Clang
+└── NO               → xtensor, XSIMD, GCC
+```
+
+## Configurations Tested
+
+**Compilers**: GCC 11-14, Clang 16-20
+**XSIMD**: ON / OFF
+**Sizes**: 1-10, 16, 32, 64, 128, 256, 512, 1024
+
+## Files
+
+| File | Description |
+|------|-------------|
+| `bench_xscalar.cpp` | Benchmark source |
+| `build.sh` | Build script (`--compiler=`, `--xsimd=`, `--clean`) |
+| `BENCHMARK_REPORT.md` | Full analysis with all data tables |
+
+## Build Options
+
+```bash
+./build.sh --compiler=clang-18 --xsimd=OFF --jobs=8 --clean
+./build.sh --list  # Show all builds
+```
