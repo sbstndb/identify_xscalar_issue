@@ -32,7 +32,7 @@ set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(benchmark)
 
 # Benchmark executable
-add_executable(bench_xscalar bench_xscalar.cpp)
+add_executable(bench_xscalar src/bench_xscalar.cpp)
 
 target_link_libraries(bench_xscalar
     PRIVATE

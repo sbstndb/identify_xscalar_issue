@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 import re
+import os
+from pathlib import Path
 from collections import defaultdict
+
+# Get project directory (parent of scripts/)
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = SCRIPT_DIR.parent
 
 # Parse results
 results = defaultdict(lambda: defaultdict(dict))
 current_build = None
 
-with open('/home/sbstndbs/identify_xscalar_issue/all_results.txt') as f:
+with open(PROJECT_DIR / 'all_results.txt') as f:
     for line in f:
         line = line.strip()
         if line.startswith('=== build_'):

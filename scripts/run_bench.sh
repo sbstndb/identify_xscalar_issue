@@ -1,5 +1,7 @@
 #!/bin/bash
-cd /home/sbstndbs/identify_xscalar_issue
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
+cd "$PROJECT_DIR"
 
 BUILDS="build_gcc11_xsimd build_gcc11_noxsimd build_gcc12_xsimd build_gcc12_noxsimd build_gcc13_xsimd build_gcc13_noxsimd build_gcc14_xsimd build_gcc14_noxsimd build_clang16_xsimd build_clang16_noxsimd build_clang17_xsimd build_clang17_noxsimd build_clang18_xsimd build_clang18_noxsimd build_clang19_xsimd build_clang19_noxsimd build_clang20_xsimd build_clang20_noxsimd"
 

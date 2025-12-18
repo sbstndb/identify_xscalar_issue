@@ -8,7 +8,7 @@ Benchmarking `xt::xtensor` vs `xt::xtensor_fixed` for scalar addition across 18 
 ## Quick Start
 
 ```bash
-./build.sh --compiler=gcc-14 --xsimd=ON --jobs=8
+./scripts/build.sh --compiler=gcc-14 --xsimd=ON --jobs=8
 ./build_gcc14_xsimd/bench_xscalar
 ```
 
@@ -39,6 +39,8 @@ xt::noalias(result) = vec1 + static_cast<T>(1.0);
 - **Small sizes + XSIMD**: Vectorization overhead exceeds computation time
 - **Large sizes**: SIMD benefits outweigh fixed-size advantages
 
+See [docs/reports/ISSUE_001_xsimd_svector_overhead.md](docs/reports/ISSUE_001_xsimd_svector_overhead.md) for detailed root cause analysis.
+
 ### Decision Guide
 
 ```
@@ -54,17 +56,23 @@ Size known at compile time?
 **XSIMD**: ON / OFF
 **Sizes**: 1-10, 16, 32, 64, 128, 256, 512, 1024
 
-## Files
+## Project Structure
 
-| File | Description |
-|------|-------------|
-| `bench_xscalar.cpp` | Benchmark source |
-| `build.sh` | Build script (`--compiler=`, `--xsimd=`, `--clean`) |
-| `BENCHMARK_REPORT.md` | Full analysis with all data tables |
+```
+├── src/                    # Source code
+│   └── bench_xscalar.cpp   # Benchmark source
+├── scripts/                # Automation scripts
+│   ├── build.sh            # Multi-compiler build script
+│   └── run_vtune_analysis.sh  # VTune profiling
+├── docs/                   # Documentation
+│   ├── BENCHMARK_REPORT.md # Full analysis with data tables
+│   └── reports/            # Performance issue reports
+└── CMakeLists.txt          # CMake configuration
+```
 
 ## Build Options
 
 ```bash
-./build.sh --compiler=clang-18 --xsimd=OFF --jobs=8 --clean
-./build.sh --list  # Show all builds
+./scripts/build.sh --compiler=clang-18 --xsimd=OFF --jobs=8 --clean
+./scripts/build.sh --list  # Show all builds
 ```

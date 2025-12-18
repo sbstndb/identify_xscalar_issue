@@ -10,13 +10,13 @@ Benchmark suite comparing `xt::xtensor` (runtime-sized) vs `xt::xtensor_fixed` (
 
 ```bash
 # Build a specific configuration
-./build.sh --compiler=gcc-14 --xsimd=ON --jobs=8
+./scripts/build.sh --compiler=gcc-14 --xsimd=ON --jobs=8
 
 # Clean rebuild
-./build.sh --compiler=clang-18 --xsimd=OFF --clean
+./scripts/build.sh --compiler=clang-18 --xsimd=OFF --clean
 
 # List existing builds
-./build.sh --list
+./scripts/build.sh --list
 ```
 
 Build output: `build_<compiler><version>_<xsimd|noxsimd>/bench_xscalar`
@@ -39,42 +39,71 @@ Build output: `build_<compiler><version>_<xsimd|noxsimd>/bench_xscalar`
 
 ```bash
 # Run benchmarks and save output
-./run_bench.sh > all_results.txt
+./scripts/run_bench.sh > all_results.txt
 
 # Parse results into comparison tables
-python3 parse_results.py
+python3 scripts/parse_results.py
 ```
 
-## Project Files
+## VTune Profiling
 
-| File | Purpose |
-|------|---------|
-| `bench_xscalar.cpp` | Benchmark source - tests `xtensor` and `xtensor_fixed` scalar addition |
-| `build.sh` | Multi-compiler build script - downloads deps (xtl, xsimd, xtensor), builds configurations |
-| `CMakeLists.txt` | CMake config - fetches Google Benchmark, links xtensor/xsimd |
-| `run_bench.sh` | Runs benchmarks across all 18 build configurations |
-| `parse_results.py` | Parses CSV output from `run_bench.sh`, generates comparison tables |
-| `BENCHMARK_REPORT.md` | Full analysis with all data tables |
+```bash
+# Collect VTune hotspots data
+./scripts/run_vtune_analysis.sh collect --configs=gcc14_xsimd,gcc14_noxsimd
 
-## Architecture
+# Generate reports
+./scripts/run_vtune_analysis.sh report
+
+# List available options
+./scripts/run_vtune_analysis.sh --help
+```
+
+## Project Structure
 
 ```
 identify_xscalar_issue/
-├── deps/                    # Auto-downloaded: xtl, xsimd, xtensor sources
-├── install/<config>/        # Per-config installed headers
-├── build_<config>/          # Per-config benchmark executables
-└── *.sh, *.cpp, *.py        # Source files
+├── src/                         # Source code
+│   └── bench_xscalar.cpp        # Benchmark source
+├── scripts/                     # Automation scripts
+│   ├── build.sh                 # Multi-compiler build script
+│   ├── run_bench.sh             # Run benchmarks across configs
+│   ├── run_all_benchmarks.sh    # CSV output for all configs
+│   ├── run_vtune_analysis.sh    # VTune profiling script
+│   └── parse_results.py         # Parse results into tables
+├── docs/                        # Documentation
+│   ├── BENCHMARK_REPORT.md      # Full analysis with data tables
+│   └── reports/                 # Performance issue reports
+│       └── ISSUE_001_*.md       # Detailed issue analysis
+├── CMakeLists.txt               # CMake configuration
+├── README.md                    # Project overview
+├── CLAUDE.md                    # This file
+├── deps/                        # Auto-downloaded dependencies (gitignored)
+├── install/                     # Per-config installed headers (gitignored)
+├── build_*/                     # Per-config build directories (gitignored)
+└── analysis_results/            # VTune profiling results (gitignored)
 ```
 
-The `build.sh` script:
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/bench_xscalar.cpp` | Benchmark source - tests `xtensor` and `xtensor_fixed` scalar addition |
+| `scripts/build.sh` | Multi-compiler build script - downloads deps, builds configurations |
+| `scripts/run_vtune_analysis.sh` | VTune profiling for performance analysis |
+| `docs/reports/ISSUE_001_*.md` | Detailed analysis of XSIMD overhead issue |
+| `CMakeLists.txt` | CMake config - fetches Google Benchmark, links xtensor/xsimd |
+
+## Build Process
+
+The `scripts/build.sh` script:
 1. Downloads xtl, xsimd, xtensor to `deps/`
 2. Builds and installs them to `install/<config>/`
 3. Builds the benchmark executable in `build_<config>/`
 
 ## Adding New Benchmark Sizes
 
-Edit `bench_xscalar.cpp` - add sizes to `REGISTER_ALL_XTENSOR` and `REGISTER_ALL_FIXED` macros.
+Edit `src/bench_xscalar.cpp` - add sizes to `REGISTER_ALL_XTENSOR` and `REGISTER_ALL_FIXED` macros.
 
 ## Adding New Container Types
 
-Add new benchmark template function (like `BM_XScalarAdd_xtensor`) and registration macros in `bench_xscalar.cpp`.
+Add new benchmark template function (like `BM_XScalarAdd_xtensor`) and registration macros in `src/bench_xscalar.cpp`.

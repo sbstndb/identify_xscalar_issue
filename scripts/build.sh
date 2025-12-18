@@ -7,8 +7,9 @@ set -e
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEPS_DIR="${SCRIPT_DIR}/deps"
-INSTALL_BASE="${SCRIPT_DIR}/install"
+PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
+DEPS_DIR="${PROJECT_DIR}/deps"
+INSTALL_BASE="${PROJECT_DIR}/install"
 
 # Default options
 COMPILER_SPEC="gcc"
@@ -61,7 +62,7 @@ log_error() {
 list_builds() {
     echo "Existing builds:"
     echo ""
-    for dir in "$SCRIPT_DIR"/build_*/; do
+    for dir in "$PROJECT_DIR"/build_*/; do
         if [[ -d "$dir" ]]; then
             local name=$(basename "$dir")
             local exe="${dir}bench_xscalar"
@@ -167,7 +168,7 @@ else
 fi
 
 INSTALL_DIR="${INSTALL_BASE}/${BUILD_SUFFIX}"
-BUILD_DIR="${SCRIPT_DIR}/build_${BUILD_SUFFIX}"
+BUILD_DIR="${PROJECT_DIR}/build_${BUILD_SUFFIX}"
 
 log_info "=============================================="
 log_info "Configuration:"
@@ -314,7 +315,7 @@ build_benchmark() {
     # Compiler flags
     local CXX_FLAGS="-O3 -march=native -g -fno-omit-frame-pointer"
 
-    cmake "$SCRIPT_DIR" \
+    cmake "$PROJECT_DIR" \
         -DCMAKE_C_COMPILER="$CC" \
         -DCMAKE_CXX_COMPILER="$CXX" \
         -DCMAKE_PREFIX_PATH="$INSTALL_DIR" \
