@@ -5,7 +5,8 @@
 **Severity**: High (10-40x performance degradation)
 **Affected Configurations**: All GCC/Clang with XSIMD enabled
 **Affected Sizes**: 2-64 elements (worst for 2-16)
-**Nature**: Localized implementation bug + design limitation
+**Affected Container**: `xtensor_fixed` ONLY (not `xtensor` or `xarray`)
+**Nature**: Compile-time vs runtime path inconsistency + allocation in slow path
 
 ---
 
@@ -19,6 +20,98 @@ When XSIMD is enabled, `xtensor_fixed` operations for small sizes (2-64 elements
 | 2    | 10.93 ns   | 0.29 ns       | **38x**  |
 | 4    | 9.77 ns    | 1.80 ns       | **5.4x** |
 | 16   | 10.79 ns   | 6.68 ns       | 1.6x     |
+
+---
+
+## Critical Discovery: Problem is Specific to `xtensor_fixed`
+
+### Container Comparison
+
+The performance issue **only affects `xtensor_fixed`**, not `xtensor` or `xarray`:
+
+| Config | `xtensor` (size=4) | `xtensor_fixed` (size=4) | Observation |
+|--------|-------------------|-------------------------|-------------|
+| XSIMD ON | 3.49 ns | 9.88 ns | **xtensor_fixed is 2.8x slower** |
+| XSIMD OFF | 6.15 ns | 1.82 ns | xtensor_fixed is 3.4x faster |
+
+With XSIMD disabled, `xtensor_fixed` has the advantage (compile-time size optimization).
+With XSIMD enabled, `xtensor_fixed` loses its advantage completely and becomes slower.
+
+### Why? Runtime vs Compile-Time Path Divergence
+
+The root cause is an **inconsistency** between how xtensor evaluates "trivial broadcast" at runtime vs compile-time:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    PATH DIVERGENCE DIAGRAM                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  result = vec + 1.0  (scalar addition)                                      │
+│         │                                                                   │
+│         ├── vec is xtensor<T,N> or xarray<T>                                │
+│         │   │                                                               │
+│         │   └── RUNTIME PATH (xassign.hpp:603)                              │
+│         │       │                                                           │
+│         │       └── e2.broadcast_shape(shape, true)                         │
+│         │           │                                                       │
+│         │           └── xscalar::broadcast_shape() returns TRUE always!     │
+│         │               │                                                   │
+│         │               └── trivial = true → linear_assigner ✓ FAST         │
+│         │                                                                   │
+│         └── vec is xtensor_fixed<T,xshape<N>>                               │
+│             │                                                               │
+│             └── COMPILE-TIME PATH (xassign.hpp:593-595)                     │
+│                 │                                                           │
+│                 └── static_trivial_broadcast<true, CT...>::value            │
+│                     │                                                       │
+│                     └── promote_index<shape_types...>::value                │
+│                         │                                                   │
+│                         └── promote_fixed<shapes...>                        │
+│                             │                                               │
+│                             └── filter_scalar: array<T,0> → fixed_shape<1>  │
+│                                 │                                           │
+│                                 └── broadcast_fixed_shape<N,1>              │
+│                                     │                                       │
+│                                     └── (N == 1) ? → FALSE when N > 1       │
+│                                         │                                   │
+│                                         └── trivial = false                 │
+│                                             → strided_loop_assigner ✗ SLOW  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### The Inconsistency in Detail
+
+**Runtime path** (`xscalar.hpp:611-614`):
+```cpp
+template <class CT>
+template <class S>
+inline bool xscalar<CT>::broadcast_shape(S&, bool) const noexcept
+{
+    return true;  // ALWAYS returns true - scalar can broadcast anywhere!
+}
+```
+
+**Compile-time path** (`xshape.hpp:331`):
+```cpp
+// In broadcast_fixed_shape_cmp_impl
+static constexpr bool value = (I_v == J_v);  // STRICT equality check!
+```
+
+For `xtensor_fixed<double, xshape<4>> + xscalar`:
+- Runtime evaluation: `xscalar::broadcast_shape()` → `true` (not used for fixed)
+- Compile-time evaluation: `fixed_shape<4>` vs `fixed_shape<1>` (from filtered scalar)
+  - At dimension 0: `I_v = 4`, `J_v = 1`
+  - `value = (4 == 1) = false` ← **This is the problem!**
+
+### Both Interpretations Are "Correct"
+
+| Path | Interpretation of "Trivial" | Logic |
+|------|---------------------------|-------|
+| Runtime | "Can I broadcast to this shape?" | Scalar → Any shape = trivial |
+| Compile-time | "Are shapes exactly equal?" | 4 ≠ 1 = non-trivial |
+
+The problem is that **they should be consistent** for assignment path selection purposes.
 
 ---
 
@@ -178,24 +271,71 @@ dynamic_shape<std::size_t> stride_sizes;  // For parallel iteration
 
 ### Is This a Design Issue or a Bug?
 
-**Answer: Both, but primarily a localized implementation bug.**
+**Answer: Implementation inconsistency + allocation bug. Both are fixable locally.**
 
-| Aspect | Classification | Explanation |
-|--------|----------------|-------------|
-| `trivial_broadcast` treating scalar as non-trivial | Design choice | Mathematically correct - scalar IS broadcast |
-| Using `dynamic_shape` instead of static types | **Implementation bug** | Can be fixed without architecture changes |
-| Missing fast-path for `xscalar + fixed_container` | Design limitation | Would require broader changes |
+| Aspect | Classification | Root Cause |
+|--------|----------------|------------|
+| Compile-time path returns `false` for scalar broadcast | **Implementation inconsistency** | `broadcast_fixed_shape_cmp_impl` uses strict equality |
+| Runtime path returns `true` for scalar broadcast | Correct behavior | `xscalar::broadcast_shape()` knows scalars are trivial |
+| Using `dynamic_shape` in strided assigner | **Allocation bug** | Can use static types when dimension is known |
+| Path divergence for `xtensor_fixed` | Design limitation | Compile-time path bypasses runtime `broadcast_shape()` |
 
-The existing TODO comment at line 1111 confirms the developers are aware:
+### Why Does Size=1 Work?
+
+When `N=1`, the compile-time path produces `fixed_shape<1>` vs `fixed_shape<1>`:
+- `value = (1 == 1) = true` → trivial → fast path
+
+This is why size=1 shows no performance regression (0.24ns vs 0.22ns).
+
+### The Core Bug
+
+The `filter_scalar` mechanism converts 0D scalar to 1D `fixed_shape<1>`, but doesn't preserve the semantic meaning that "this came from a scalar and should always be trivial". The subsequent equality check at `xshape.hpp:331` treats it as a regular 1D tensor.
+
+**Fix options**:
+1. Modify `broadcast_fixed_shape_cmp_impl` to recognize `J_v == 1` as always trivial
+2. Create a special `scalar_shape` marker type that propagates through the system
+3. Force the runtime path for scalar operations even with fixed containers
+
+The existing TODO comment at line 1111 shows developers are aware of the allocation issue:
 ```cpp
 // TODO can we get rid of this and use `shape_type`?
 ```
 
 ---
 
-## Proposed Fix
+## Proposed Fixes
 
-### Safe Implementation Using Existing Infrastructure
+There are **two independent issues** that can be fixed separately:
+
+### Fix 1: Consistent Trivial Broadcast for Scalars (Primary Fix)
+
+The cleanest fix is to make the compile-time path consistent with the runtime path by treating broadcast from `1` to `N` as trivial (since it comes from a scalar):
+
+**File**: `xshape.hpp:331`
+
+```cpp
+// BEFORE:
+static constexpr bool value = (I_v == J_v);
+
+// AFTER: Treat broadcast from 1 as trivial (same as xscalar::broadcast_shape)
+static constexpr bool value = (I_v == J_v) || (I_v == 1) || (J_v == 1);
+```
+
+**Rationale**:
+- Broadcasting from size 1 to size N is semantically trivial - just replicate the value
+- This matches `xscalar::broadcast_shape()` which returns `true`
+- The resulting iteration pattern for linear assignment handles this correctly
+
+**Risk Assessment**:
+- Low risk: Broadcasting from 1 is always valid and simple
+- This matches the runtime behavior exactly
+- The iteration logic already handles replicated values
+
+### Fix 2: Static Shape for Index Variables (Secondary Fix)
+
+Even if Fix 1 is applied, there may be other non-trivial broadcasts that still use the strided path. Using static shapes for index variables eliminates allocation overhead:
+
+**File**: `xassign.hpp:1111`
 
 xtensor already provides the `static_dimension` trait:
 
@@ -210,9 +350,7 @@ struct static_dimension
 };
 ```
 
-### Proposed Code Change
-
-**File**: `xassign.hpp:1111`
+**Proposed Change**:
 
 ```cpp
 // BEFORE:
@@ -235,6 +373,10 @@ struct idx_type_selector
 using idx_type = typename idx_type_selector<E1>::type;
 idx_type idx{}, max_shape{};
 ```
+
+### Recommended Approach
+
+**Apply Fix 1 first** - it solves the root cause (wrong path selection) rather than just optimizing the slow path. Fix 2 is a good defense-in-depth improvement but addresses the symptom rather than the cause.
 
 ---
 
@@ -358,14 +500,24 @@ Apply the proposed fix to your local xtensor installation.
 
 | File | Lines | Content |
 |------|-------|---------|
+| **Critical Path Divergence** | | |
+| `xassign.hpp` | 585-595 | Compile-time path: `static_trivial_broadcast` |
+| `xassign.hpp` | 603 | Runtime path: `e2.broadcast_shape(shape, true)` |
+| `xassign.hpp` | 560 | `static_trivial_broadcast` → `promote_index::value` |
+| **Trivial Broadcast Logic** | | |
+| `xshape.hpp` | 331 | **KEY BUG**: `value = (I_v == J_v)` strict equality |
+| `xshape.hpp` | 439-464 | `promote_fixed` recursion with `filter_scalar` |
+| `xshape.hpp` | 423-436 | `filter_scalar`: `array<T,0>` → `fixed_shape<1>` |
+| `xscalar.hpp` | 611-614 | `broadcast_shape()` always returns `true` |
+| **Assignment Path Selection** | | |
 | `xassign.hpp` | 409-412 | `linear_assign` condition |
-| `xassign.hpp` | 454-477 | Assignment path selection |
+| `xassign.hpp` | 454-477 | Three-way assignment dispatch |
+| **Allocation Sites** | | |
+| `xassign.hpp` | 1111 | **Primary allocation**: `dynamic_shape<> idx, max_shape` |
 | `xassign.hpp` | 884, 929 | `nth_idx` allocations |
-| `xassign.hpp` | 1111 | **Primary allocation site** |
-| `xshape.hpp` | 29 | `dynamic_shape` definition |
+| `xshape.hpp` | 29 | `dynamic_shape = svector<T, 4>` |
+| **Utilities** | | |
 | `xshape.hpp` | 247-251 | `static_dimension` trait |
-| `xshape.hpp` | 313-332 | `broadcast_fixed_shape_cmp_impl` |
-| `xshape.hpp` | 423-436 | `filter_scalar` (0D → 1D conversion) |
 
 ### VTune Results
 
@@ -379,15 +531,26 @@ Line 1111 comment: `"TODO can we get rid of this and use shape_type?"`
 
 ## Conclusion
 
-The performance issue stems from **two interacting factors**:
+The performance issue stems from **an inconsistency between runtime and compile-time evaluation of "trivial broadcast"**:
 
-1. **Design choice**: Broadcasting from `xscalar` (0D) to `fixed_shape<N>` (1D) is considered "non-trivial" when N > 1, forcing the strided assignment path.
+1. **Runtime path** (`xtensor`, `xarray`): `xscalar::broadcast_shape()` always returns `true`, correctly recognizing that scalar-to-any-shape is trivial. Result: `linear_assigner` (fast).
 
-2. **Implementation bug**: The strided assignment path uses `dynamic_shape` (heap-allocating `svector`) instead of compile-time sized arrays, even when the destination type has a known static dimension.
+2. **Compile-time path** (`xtensor_fixed`): `broadcast_fixed_shape_cmp_impl` uses strict equality (`N == 1`), treating scalar broadcast as non-trivial for N > 1. Result: `strided_loop_assigner` (slow with allocations).
 
-The **fix is localized** (3 lines in `xassign.hpp`) and **safe** (fallback for dynamic cases). It would eliminate the allocation overhead for all fixed-dimension tensors while preserving correct behavior for dynamic arrays.
+This explains why:
+- `xtensor` and `xarray` don't have the problem (use runtime path)
+- `xtensor_fixed` has the problem (use compile-time path)
+- Size=1 doesn't have the problem (`1 == 1` is true)
+
+### Two-Part Fix
+
+| Fix | Target | Complexity | Impact |
+|-----|--------|-----------|--------|
+| Fix 1: Consistent trivial broadcast | `xshape.hpp:331` | 1 line change | **Eliminates root cause** |
+| Fix 2: Static index types | `xassign.hpp:1111` | ~10 lines | Defense-in-depth |
 
 **Recommendation**:
-- **Short-term**: Disable XSIMD for small `xtensor_fixed` workloads
-- **Medium-term**: Submit PR with proposed fix to xtensor
-- **Long-term**: Consider adding fast-path for `xscalar` + contiguous container (skip strided path entirely)
+- **Immediate**: Apply Fix 1 (consistent trivial broadcast) - solves the root cause
+- **Short-term workaround**: Disable XSIMD for small `xtensor_fixed` workloads
+- **Medium-term**: Submit PR to xtensor with both fixes
+- **Testing**: Verify that `linear_assigner` handles broadcast-from-1 correctly (it should, as this matches runtime behavior)
